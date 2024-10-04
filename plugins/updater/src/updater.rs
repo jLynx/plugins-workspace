@@ -858,24 +858,38 @@ impl Update {
             .prefix("tauri_current_app")
             .tempdir()?;
 
+        let tmp_extract_dir = tempfile::Builder::new()
+            .prefix("tauri_updated_app")
+            .tempdir()?
+            .into_path();
+
         // create backup of our current app
-        std::fs::rename(&self.extract_path, tmp_dir.path())?;
+        let move_result = Move::from_source(&self.extract_path).to_dest(tmp_dir.path());
+        let need_authorization = if let Err(err) = move_result {
+            if is_permission_error(&err) {
+                true
+            } else {
+                return Err(err.into());
+            }
+        } else {
+            false
+        };
 
         let decoder = GzDecoder::new(cursor);
         let mut archive = tar::Archive::new(decoder);
 
-        std::fs::create_dir(&self.extract_path)?;
+        std::fs::create_dir(&tmp_extract_dir)?;
 
         for entry in archive.entries()? {
             let mut entry = entry?;
 
             // skip the first folder (should be the app name)
             let collected_path: PathBuf = entry.path()?.iter().skip(1).collect();
-            let extraction_path = &self.extract_path.join(collected_path);
+            let extraction_path = tmp_extract_dir.join(collected_path);
 
             // if something went wrong during the extraction, we should restore previous app
-            if let Err(err) = entry.unpack(extraction_path) {
-                for file in extracted_files.iter().rev() {
+            if let Err(err) = entry.unpack(&extraction_path) {
+                for file in &extracted_files {
                     // delete all the files we extracted
                     if file.is_dir() {
                         std::fs::remove_dir(file)?;
@@ -883,11 +897,37 @@ impl Update {
                         std::fs::remove_file(file)?;
                     }
                 }
-                std::fs::rename(tmp_dir.path(), &self.extract_path)?;
+                if !need_authorization {
+                    Move::from_source(tmp_dir.path()).to_dest(&self.extract_path)?;
+                }
+                std::fs::remove_dir_all(&tmp_extract_dir).ok();
                 return Err(err.into());
             }
 
-            extracted_files.push(extraction_path.to_path_buf());
+            extracted_files.push(extraction_path);
+        }
+
+        if need_authorization {
+            // Ask for permission using AppleScript - run the two moves with admin privileges
+            let script = format!(
+                "do shell script \"mv -f '{extract_path}' '{tmp_dir}' && mv -f '{tmp_extract_dir}' '{extract_path}'\" with administrator privileges",
+                extract_path = self.extract_path.display(),
+                tmp_dir = tmp_dir.path().display(),
+                tmp_extract_dir = tmp_extract_dir.display()
+            );
+            let mut osascript = std::process::Command::new("osascript");
+            osascript.arg("-e").arg(script);
+            let status = osascript.status()?;
+            if !status.success() {
+                std::fs::remove_dir_all(&tmp_extract_dir).ok();
+                return Err(Error::Io(std::io::Error::new(
+                    std::io::ErrorKind::PermissionDenied,
+                    "Failed to move the new app into place",
+                )));
+            }
+        } else {
+            // move the new app to the target path
+            Move::from_source(&tmp_extract_dir).to_dest(&self.extract_path)?;
         }
 
         let _ = std::process::Command::new("touch")
@@ -896,6 +936,16 @@ impl Update {
 
         Ok(())
     }
+}
+
+#[cfg(target_os = "macos")]
+fn is_permission_error(err: &Error) -> bool {
+    if let Error::Io(io_err) = err {
+        if io_err.kind() == std::io::ErrorKind::PermissionDenied {
+            return true;
+        }
+    }
+    false
 }
 
 /// Gets the target string used on the updater.
