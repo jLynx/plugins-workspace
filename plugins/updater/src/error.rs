@@ -63,6 +63,8 @@ pub enum Error {
     TempDirNotOnSameMountPoint,
     #[error("binary for the current target not found in the archive")]
     BinaryNotFoundInArchive,
+    #[error("Failed to install .deb package")]
+    DebInstallFailed,
     #[error("invalid updater binary format")]
     InvalidUpdaterFormat,
     #[error(transparent)]
