@@ -7026,6 +7026,7 @@ dependencies = [
  "futures-util",
  "http",
  "infer",
+ "log",
  "minisign-verify",
  "percent-encoding",
  "reqwest",
