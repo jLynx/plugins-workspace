@@ -758,10 +758,20 @@ impl Update {
 ))]
 impl Update {
     fn install_inner(&self, bytes: &[u8]) -> Result<()> {
+        log::debug!("Starting Linux update installation");
+        log::debug!("Extract path: {:?}", self.extract_path);
+        
+        // Check if it's a tar.gz archive
+        if infer::archive::is_gz(bytes) {
+            log::debug!("Detected tar.gz archive, attempting to extract");
+            return self.handle_targz(bytes);
+        }
+
+        // If not a tar.gz, try direct installation
+        log::debug!("Not a tar.gz archive, attempting direct installation");
         if self.is_deb_package() {
             self.install_deb_update(bytes)
         } else {
-            // Handle AppImage or other formats
             self.install_appimage_update(bytes)
         }
     }
