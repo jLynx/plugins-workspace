@@ -882,7 +882,6 @@ impl Update {
             }
             
             if !found_deb {
-                log::error!("No .deb package found in tar.gz archive");
                 return Err(Error::BinaryNotFoundInArchive);
             }
         } else {
