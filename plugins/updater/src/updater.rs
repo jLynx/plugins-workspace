@@ -774,38 +774,28 @@ impl Update {
         }
     }
 
-    
-    // Separate the AppImage logic into its own function
     fn install_appimage_update(&self, bytes: &[u8]) -> Result<()> {
         use std::os::unix::fs::{MetadataExt, PermissionsExt};
-        
         let extract_path_metadata = self.extract_path.metadata()?;
-    
         let tmp_dir_locations = vec![
             Box::new(|| Some(std::env::temp_dir())) as Box<dyn FnOnce() -> Option<PathBuf>>,
             Box::new(dirs::cache_dir),
             Box::new(|| Some(self.extract_path.parent().unwrap().to_path_buf())),
         ];
-    
         for tmp_dir_location in tmp_dir_locations {
             if let Some(tmp_dir_location) = tmp_dir_location() {
                 let tmp_dir = tempfile::Builder::new()
                     .prefix("tauri_current_app")
                     .tempdir_in(tmp_dir_location)?;
                 let tmp_dir_metadata = tmp_dir.path().metadata()?;
-    
                 if extract_path_metadata.dev() == tmp_dir_metadata.dev() {
                     let mut perms = tmp_dir_metadata.permissions();
                     perms.set_mode(0o700);
                     std::fs::set_permissions(tmp_dir.path(), perms)?;
-    
                     let tmp_app_image = &tmp_dir.path().join("current_app.AppImage");
-    
                     let permissions = std::fs::metadata(&self.extract_path)?.permissions();
-    
                     // create a backup of our current app image
                     std::fs::rename(&self.extract_path, tmp_app_image)?;
-    
                     #[cfg(feature = "zip")]
                     if infer::archive::is_gz(bytes) {
                         // extract the buffer to the tmp_dir
@@ -826,7 +816,6 @@ impl Update {
                         std::fs::rename(tmp_app_image, &self.extract_path)?;
                         return Err(Error::BinaryNotFoundInArchive);
                     }
-    
                     return match std::fs::write(&self.extract_path, bytes)
                         .and_then(|_| std::fs::set_permissions(&self.extract_path, permissions))
                     {
