@@ -759,8 +759,8 @@ impl Update {
 impl Update {
     fn install_inner(&self, bytes: &[u8]) -> Result<()> {
         log::warn!("=========== UPDATE ==================");
-        log::debug!("Starting Linux update installation");
-        log::debug!("Extract path: {:?}", self.extract_path);
+        log::warn!("Starting Linux update installation");
+        log::warn!("Extract path: {:?}", self.extract_path);
 
         if self.is_deb_package() {
             self.install_deb_update(bytes)
@@ -861,7 +861,7 @@ impl Update {
         // Write the .deb file
         std::fs::write(&deb_path, bytes)?;
         
-        log::info!("Preparing to install .deb update from: {}", deb_path.display());
+        log::warn!("Preparing to install .deb update from: {}", deb_path.display());
 
         // Try different privilege escalation methods
         let installation_result = self.try_install_with_privileges(&deb_path);
@@ -881,7 +881,7 @@ impl Update {
             .status()
         {
             if status.success() {
-                log::info!("Successfully installed update using pkexec");
+                log::warn!("Successfully installed update using pkexec");
                 return Ok(());
             }
         }
@@ -889,13 +889,13 @@ impl Update {
         // 2. Try zenity for a more user-friendly graphical sudo experience
         if let Ok(password) = self.get_password_graphically() {
             if self.install_with_sudo(deb_path, &password)? {
-                log::info!("Successfully installed update using sudo (graphical)");
+                log::warn!("Successfully installed update using sudo (graphical)");
                 return Ok(());
             }
         }
 
         // 3. Final fallback: terminal sudo
-        log::info!("Falling back to terminal sudo for installation");
+        log::warn!("Falling back to terminal sudo for installation");
         let status = std::process::Command::new("sudo")
             .arg("dpkg")
             .arg("-i")
