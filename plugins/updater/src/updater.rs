@@ -795,6 +795,7 @@ impl Update {
                     let mut perms = tmp_dir_metadata.permissions();
                     perms.set_mode(0o700);
                     std::fs::set_permissions(tmp_dir.path(), perms)?;
+                    
                     let tmp_app_image = &tmp_dir.path().join("current_app.AppImage");
 
                     let permissions = std::fs::metadata(&self.extract_path)?.permissions();
@@ -826,6 +827,7 @@ impl Update {
                         std::fs::rename(tmp_app_image, &self.extract_path)?;
                         return Err(Error::BinaryNotFoundInArchive);
                     }
+
                     return match std::fs::write(&self.extract_path, bytes)
                         .and_then(|_| std::fs::set_permissions(&self.extract_path, permissions))
                     {
@@ -839,7 +841,7 @@ impl Update {
                 }
             }
         }
-        
+
         Err(Error::TempDirNotOnSameMountPoint)
     }
 
