@@ -777,42 +777,52 @@ impl Update {
     fn install_appimage_update(&self, bytes: &[u8]) -> Result<()> {
         use std::os::unix::fs::{MetadataExt, PermissionsExt};
         let extract_path_metadata = self.extract_path.metadata()?;
+
         let tmp_dir_locations = vec![
             Box::new(|| Some(std::env::temp_dir())) as Box<dyn FnOnce() -> Option<PathBuf>>,
             Box::new(dirs::cache_dir),
             Box::new(|| Some(self.extract_path.parent().unwrap().to_path_buf())),
         ];
+
         for tmp_dir_location in tmp_dir_locations {
             if let Some(tmp_dir_location) = tmp_dir_location() {
                 let tmp_dir = tempfile::Builder::new()
                     .prefix("tauri_current_app")
                     .tempdir_in(tmp_dir_location)?;
                 let tmp_dir_metadata = tmp_dir.path().metadata()?;
+
                 if extract_path_metadata.dev() == tmp_dir_metadata.dev() {
                     let mut perms = tmp_dir_metadata.permissions();
                     perms.set_mode(0o700);
                     std::fs::set_permissions(tmp_dir.path(), perms)?;
                     let tmp_app_image = &tmp_dir.path().join("current_app.AppImage");
+
                     let permissions = std::fs::metadata(&self.extract_path)?.permissions();
+
                     // create a backup of our current app image
                     std::fs::rename(&self.extract_path, tmp_app_image)?;
+
                     #[cfg(feature = "zip")]
                     if infer::archive::is_gz(bytes) {
                         // extract the buffer to the tmp_dir
+                        // we extract our signed archive into our final directory without any temp file
                         let archive = Cursor::new(bytes);
                         let decoder = flate2::read::GzDecoder::new(archive);
                         let mut archive = tar::Archive::new(decoder);
                         for mut entry in archive.entries()?.flatten() {
                             if let Ok(path) = entry.path() {
                                 if path.extension() == Some(OsStr::new("AppImage")) {
+                                    // if something went wrong during the extraction, we should restore previous app
                                     if let Err(err) = entry.unpack(&self.extract_path) {
                                         std::fs::rename(tmp_app_image, &self.extract_path)?;
                                         return Err(err.into());
                                     }
+                                    // early finish we have everything we need here
                                     return Ok(());
                                 }
                             }
                         }
+                        // if we have not returned early we should restore the backup
                         std::fs::rename(tmp_app_image, &self.extract_path)?;
                         return Err(Error::BinaryNotFoundInArchive);
                     }
@@ -820,6 +830,7 @@ impl Update {
                         .and_then(|_| std::fs::set_permissions(&self.extract_path, permissions))
                     {
                         Err(err) => {
+                            // if something went wrong during the extraction, we should restore previous app
                             std::fs::rename(tmp_app_image, &self.extract_path)?;
                             Err(err.into())
                         }
@@ -828,7 +839,7 @@ impl Update {
                 }
             }
         }
-    
+        
         Err(Error::TempDirNotOnSameMountPoint)
     }
 
