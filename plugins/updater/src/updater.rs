@@ -849,22 +849,53 @@ impl Update {
     }
 
     fn install_deb_update(&self, bytes: &[u8]) -> Result<()> {
-        // Create a temporary directory in /tmp (which is typically writable by all users)
+        use std::process::Command;
+        use flate2::read::GzDecoder;
+        
+        log::warn!("Starting DEB package installation");
+        
+        // Create a temporary directory
         let tmp_dir = tempfile::Builder::new()
             .prefix("tauri_deb_update")
             .tempdir_in("/tmp")?;
         
         let deb_path = tmp_dir.path().join("package.deb");
         
-        // Write the .deb file
-        std::fs::write(&deb_path, bytes)?;
+        // Check if we need to extract from tar.gz first
+        if infer::archive::is_gz(bytes) {
+            log::warn!("Detected tar.gz archive, extracting DEB package...");
+            let decoder = GzDecoder::new(Cursor::new(bytes));
+            let mut archive = tar::Archive::new(decoder);
+            
+            // Look for .deb file in archive
+            let mut found_deb = false;
+            for mut entry in archive.entries()?.flatten() {
+                if let Ok(path) = entry.path() {
+                    if path.extension() == Some(OsStr::new("deb")) {
+                        log::warn!("Found DEB package in archive, extracting to: {}", deb_path.display());
+                        entry.unpack(&deb_path)?;
+                        found_deb = true;
+                        break;
+                    }
+                }
+            }
+            
+            if !found_deb {
+                log::error!("No .deb package found in tar.gz archive");
+                return Err(Error::BinaryNotFoundInArchive);
+            }
+        } else {
+            // Direct .deb file
+            log::warn!("Writing DEB package directly to: {}", deb_path.display());
+            std::fs::write(&deb_path, bytes)?;
+        }
         
-        log::warn!("Preparing to install .deb update from: {}", deb_path.display());
-
+        log::warn!("Preparing to install DEB package from: {}", deb_path.display());
+    
         // Try different privilege escalation methods
         let installation_result = self.try_install_with_privileges(&deb_path);
-
-        // Clean up the temporary file regardless of installation result
+    
+        // Clean up
         let _ = std::fs::remove_file(&deb_path);
         
         installation_result
