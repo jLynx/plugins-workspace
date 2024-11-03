@@ -29,12 +29,12 @@ use tauri::{
     plugin::{Builder as PluginBuilder, TauriPlugin},
     Manager, RunEvent, Runtime,
 };
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, RwLock};
 
 use std::collections::HashMap;
 
 #[derive(Default)]
-pub struct DbInstances(pub Mutex<HashMap<String, DbPool>>);
+pub struct DbInstances(pub RwLock<HashMap<String, DbPool>>);
 
 #[derive(Serialize)]
 #[serde(untagged)]
@@ -140,12 +140,14 @@ impl Builder {
 
                 tauri::async_runtime::block_on(async move {
                     let instances = DbInstances::default();
-                    let mut lock = instances.0.lock().await;
+                    let mut lock = instances.0.write().await;
 
                     for db in config.preload {
                         let pool = DbPool::connect(&db, app).await?;
 
-                        if let Some(migrations) = self.migrations.as_mut().unwrap().remove(&db) {
+                        if let Some(migrations) =
+                            self.migrations.as_mut().and_then(|mm| mm.remove(&db))
+                        {
                             let migrator = Migrator::new(migrations).await?;
                             pool.migrate(&migrator).await?;
                         }
@@ -166,7 +168,7 @@ impl Builder {
                 if let RunEvent::Exit = event {
                     tauri::async_runtime::block_on(async move {
                         let instances = &*app.state::<DbInstances>();
-                        let instances = instances.0.lock().await;
+                        let instances = instances.0.read().await;
                         for value in instances.values() {
                             value.close().await;
                         }
