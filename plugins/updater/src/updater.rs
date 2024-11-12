@@ -877,7 +877,12 @@ impl Update {
     }
 
     fn install_deb(&self, bytes: &[u8]) -> Result<()> {
-        // Try different temp directories, similar to AppImage handling
+        // First verify the bytes are actually a .deb package
+        if !infer::archive::is_deb(bytes) {
+            return Err(Error::InvalidUpdaterFormat);
+        }
+
+        // Try different temp directories
         let tmp_dir_locations = ["/tmp", "/var/tmp", "/dev/shm"];
 
         let tmp_dir = tmp_dir_locations
