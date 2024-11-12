@@ -879,7 +879,7 @@ impl Update {
     fn install_deb(&self, bytes: &[u8]) -> Result<()> {
         // Try different temp directories, similar to AppImage handling
         let tmp_dir_locations = ["/tmp", "/var/tmp", "/dev/shm"];
-        
+
         let tmp_dir = tmp_dir_locations
             .iter()
             .find_map(|dir| {
@@ -889,12 +889,12 @@ impl Update {
                     .ok()
             })
             .ok_or_else(|| Error::TempDirNotFound)?;
-    
+
         let deb_path = tmp_dir.path().join("package.deb");
-    
+
         // Direct .deb file
         std::fs::write(&deb_path, bytes)?;
-    
+
         // Try different privilege escalation methods
         let installation_result = self.try_install_with_privileges(&deb_path);
 
@@ -914,7 +914,7 @@ impl Update {
             }
         }
 
-        // 2. Try zenity for a more user-friendly graphical sudo experience
+        // 2. Try zenity or kdialog for a graphical sudo experience
         if let Ok(password) = self.get_password_graphically() {
             if self.install_with_sudo(deb_path, &password)? {
                 return Ok(());
@@ -936,19 +936,33 @@ impl Update {
     }
 
     fn get_password_graphically(&self) -> Result<String> {
-        let output = std::process::Command::new("zenity")
+        // Try zenity first
+        let zenity_result = std::process::Command::new("zenity")
             .args([
                 "--password",
                 "--title=Authentication Required",
                 "--text=Enter your password to install the update:",
             ])
-            .output()?;
+            .output();
 
-        if output.status.success() {
-            Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
-        } else {
-            Err(Error::AuthenticationFailed)
+        if let Ok(output) = zenity_result {
+            if output.status.success() {
+                return Ok(String::from_utf8_lossy(&output.stdout).trim().to_string());
+            }
         }
+
+        // Fall back to kdialog if zenity fails or isn't available
+        let kdialog_result = std::process::Command::new("kdialog")
+            .args(["--password", "Enter your password to install the update:"])
+            .output();
+
+        if let Ok(output) = kdialog_result {
+            if output.status.success() {
+                return Ok(String::from_utf8_lossy(&output.stdout).trim().to_string());
+            }
+        }
+
+        Err(Error::AuthenticationFailed)
     }
 
     fn install_with_sudo(&self, deb_path: &Path, password: &str) -> Result<bool> {
