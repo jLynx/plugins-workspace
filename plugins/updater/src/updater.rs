@@ -883,15 +883,23 @@ impl Update {
         }
 
         // Try different temp directories
-        let tmp_dir_locations = ["/tmp", "/var/tmp", "/dev/shm"];
+        let tmp_dir_locations = vec![
+            Box::new(|| Some(std::env::temp_dir())) as Box<dyn FnOnce() -> Option<PathBuf>>,
+            Box::new(dirs::cache_dir),
+            Box::new(|| Some(self.extract_path.parent().unwrap().to_path_buf())),
+        ];
 
         let tmp_dir = tmp_dir_locations
-            .iter()
-            .find_map(|dir| {
-                tempfile::Builder::new()
-                    .prefix("tauri_deb_update")
-                    .tempdir_in(dir)
-                    .ok()
+            .into_iter()
+            .find_map(|loc| {
+                if let Some(path) = loc() {
+                    tempfile::Builder::new()
+                        .prefix("tauri_deb_update")
+                        .tempdir_in(path)
+                        .ok()
+                } else {
+                    None
+                }
             })
             .ok_or_else(|| Error::TempDirNotFound)?;
 
@@ -901,9 +909,7 @@ impl Update {
         std::fs::write(&deb_path, bytes)?;
 
         // Try different privilege escalation methods
-        let installation_result = self.try_install_with_privileges(&deb_path);
-
-        installation_result
+        self.try_install_with_privileges(&deb_path)
     }
 
     fn try_install_with_privileges(&self, deb_path: &Path) -> Result<()> {
