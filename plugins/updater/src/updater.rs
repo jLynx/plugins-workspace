@@ -844,12 +844,35 @@ impl Update {
     }
 
     fn is_deb_package(&self) -> bool {
-        // Check if we're running from a .deb installation
-        // Typically installed in /usr/bin or /usr/local/bin
-        self.extract_path
+        // First check if we're in a typical Debian installation path
+        let in_system_path = self.extract_path
             .to_str()
             .map(|p| p.starts_with("/usr"))
-            .unwrap_or(false)
+            .unwrap_or(false);
+    
+        if !in_system_path {
+            return false;
+        }
+    
+        // Then verify it's actually a Debian-based system by checking for dpkg
+        let dpkg_exists = std::path::Path::new("/var/lib/dpkg").exists();
+        let apt_exists = std::path::Path::new("/etc/apt").exists();
+    
+        // Additional check for the package in dpkg database
+        let package_in_dpkg = if let Ok(output) = std::process::Command::new("dpkg")
+            .args(["-S", &self.extract_path.to_string_lossy()])
+            .output()
+        {
+            output.status.success()
+        } else {
+            false
+        };
+    
+        // Consider it a deb package only if:
+        // 1. We're in a system path AND
+        // 2. We have Debian package management tools AND
+        // 3. The binary is tracked by dpkg
+        dpkg_exists && apt_exists && package_in_dpkg
     }
 
     fn install_deb_update(&self, bytes: &[u8]) -> Result<()> {
