@@ -765,14 +765,14 @@ impl Update {
     ///
     fn install_inner(&self, bytes: &[u8]) -> Result<()> {
         if self.is_deb_package() {
-            self.install_deb_update(bytes)
+            self.install_deb(bytes)
         } else {
             // Handle AppImage or other formats
-            self.install_appimage_update(bytes)
+            self.install_appimage(bytes)
         }
     }
 
-    fn install_appimage_update(&self, bytes: &[u8]) -> Result<()> {
+    fn install_appimage(&self, bytes: &[u8]) -> Result<()> {
         use std::os::unix::fs::{MetadataExt, PermissionsExt};
         let extract_path_metadata = self.extract_path.metadata()?;
 
@@ -876,22 +876,27 @@ impl Update {
         dpkg_exists && apt_exists && package_in_dpkg
     }
 
-    fn install_deb_update(&self, bytes: &[u8]) -> Result<()> {
-        // Create a temporary directory
-        let tmp_dir = tempfile::Builder::new()
-            .prefix("tauri_deb_update")
-            .tempdir_in("/tmp")?;
-
+    fn install_deb(&self, bytes: &[u8]) -> Result<()> {
+        // Try different temp directories, similar to AppImage handling
+        let tmp_dir_locations = ["/tmp", "/var/tmp", "/dev/shm"];
+        
+        let tmp_dir = tmp_dir_locations
+            .iter()
+            .find_map(|dir| {
+                tempfile::Builder::new()
+                    .prefix("tauri_deb_update")
+                    .tempdir_in(dir)
+                    .ok()
+            })
+            .ok_or_else(|| Error::TempDirNotFound)?;
+    
         let deb_path = tmp_dir.path().join("package.deb");
-
+    
         // Direct .deb file
         std::fs::write(&deb_path, bytes)?;
-
+    
         // Try different privilege escalation methods
         let installation_result = self.try_install_with_privileges(&deb_path);
-
-        // Clean up
-        let _ = std::fs::remove_file(&deb_path);
 
         installation_result
     }

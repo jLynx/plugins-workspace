@@ -63,6 +63,8 @@ pub enum Error {
     TempDirNotOnSameMountPoint,
     #[error("binary for the current target not found in the archive")]
     BinaryNotFoundInArchive,
+    #[error("failed to create temporary directory")]
+    TempDirNotFound,
     #[error("Authentication failed or was cancelled")]
     AuthenticationFailed,
     #[error("Failed to install .deb package")]
