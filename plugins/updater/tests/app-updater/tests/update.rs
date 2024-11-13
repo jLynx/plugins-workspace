@@ -105,9 +105,7 @@ impl Default for BundleTarget {
         #[cfg(any(target_os = "macos", target_os = "ios"))]
         return Self::App;
         #[cfg(target_os = "linux")]
-        {
-            return Self::AppImage;
-        }
+        return Self::Deb;
         #[cfg(windows)]
         return Self::Nsis;
     }
@@ -118,15 +116,15 @@ fn bundle_paths(root_dir: &Path, version: &str) -> Vec<(BundleTarget, PathBuf)> 
     // Return both AppImage and Deb paths
     vec![
         (
-            BundleTarget::AppImage,
-            root_dir.join(format!(
-                "target/debug/bundle/appimage/app-updater_{version}_amd64.AppImage"
-            )),
-        ),
-        (
             BundleTarget::Deb,
             root_dir.join(format!(
                 "target/debug/bundle/deb/app-updater_{version}_amd64.deb"
+            )),
+        ),
+        (
+            BundleTarget::AppImage,
+            root_dir.join(format!(
+                "target/debug/bundle/appimage/app-updater_{version}_amd64.AppImage"
             )),
         ),
     ]
@@ -212,7 +210,7 @@ fn update_app() {
             );
 
             #[cfg(target_os = "linux")]
-            let bundle_targets = vec![BundleTarget::AppImage, BundleTarget::Deb];
+            let bundle_targets = vec![BundleTarget::Deb, BundleTarget::AppImage];
             #[cfg(not(target_os = "linux"))]
             let bundle_targets = vec![BundleTarget::default()];
 
