@@ -261,8 +261,8 @@ fn update_app() {
                         "target/debug/{}",
                         out_updater_path.file_name().unwrap().to_str().unwrap()
                     ));
-                    std::fs::rename(&out_updater_path, &updater_path)
-                        .expect("failed to rename bundle");
+                    // std::fs::rename(&out_updater_path, &updater_path)
+                    //     .expect("failed to rename bundle");
 
                     let target = target.clone();
 
