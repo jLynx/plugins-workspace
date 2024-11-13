@@ -82,9 +82,8 @@ fn build_app(cwd: &Path, config: &Config, bundle_updater: bool, target: BundleTa
 #[derive(Copy, Clone)]
 enum BundleTarget {
     AppImage,
-
+    Deb,
     App,
-
     Msi,
     Nsis,
 }
@@ -93,6 +92,7 @@ impl BundleTarget {
     fn name(self) -> &'static str {
         match self {
             Self::AppImage => "appimage",
+            Self::Deb => "deb",
             Self::App => "app",
             Self::Msi => "msi",
             Self::Nsis => "nsis",
@@ -105,7 +105,15 @@ impl Default for BundleTarget {
         #[cfg(any(target_os = "macos", target_os = "ios"))]
         return Self::App;
         #[cfg(target_os = "linux")]
-        return Self::AppImage;
+        {
+            // Check if we're on a Debian-based system
+            if std::path::Path::new("/var/lib/dpkg").exists()
+                && std::path::Path::new("/etc/apt").exists()
+            {
+                return Self::Deb;
+            }
+            return Self::AppImage;
+        }
         #[cfg(windows)]
         return Self::Nsis;
     }
@@ -113,12 +121,23 @@ impl Default for BundleTarget {
 
 #[cfg(target_os = "linux")]
 fn bundle_paths(root_dir: &Path, version: &str) -> Vec<(BundleTarget, PathBuf)> {
-    vec![(
-        BundleTarget::AppImage,
-        root_dir.join(format!(
-            "target/debug/bundle/appimage/app-updater_{version}_amd64.AppImage"
-        )),
-    )]
+    // Check if we're on a Debian-based system
+    if std::path::Path::new("/var/lib/dpkg").exists() 
+        && std::path::Path::new("/etc/apt").exists() {
+        vec![(
+            BundleTarget::Deb,
+            root_dir.join(format!(
+                "target/debug/bundle/deb/app-updater_{version}_amd64.deb"
+            )),
+        )]
+    } else {
+        vec![(
+            BundleTarget::AppImage,
+            root_dir.join(format!(
+                "target/debug/bundle/appimage/app-updater_{version}_amd64.AppImage"
+            )),
+        )]
+    }
 }
 
 #[cfg(target_os = "macos")]
