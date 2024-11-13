@@ -889,27 +889,27 @@ impl Update {
             Box::new(|| Some(self.extract_path.parent().unwrap().to_path_buf())),
         ];
 
-        let tmp_dir = tmp_dir_locations
-            .into_iter()
-            .find_map(|loc| {
-                if let Some(path) = loc() {
-                    tempfile::Builder::new()
-                        .prefix("tauri_deb_update")
-                        .tempdir_in(path)
-                        .ok()
-                } else {
-                    None
+        // Try writing to multiple temp locations until one succeeds
+        for tmp_dir_location in tmp_dir_locations {
+            if let Some(path) = tmp_dir_location() {
+                if let Ok(tmp_dir) = tempfile::Builder::new()
+                    .prefix("tauri_deb_update")
+                    .tempdir_in(path)
+                {
+                    let deb_path = tmp_dir.path().join("package.deb");
+
+                    // Try writing the .deb file
+                    if std::fs::write(&deb_path, bytes).is_ok() {
+                        // If write succeeds, proceed with installation
+                        return self.try_install_with_privileges(&deb_path);
+                    }
+                    // If write fails, continue to next temp location
                 }
-            })
-            .ok_or_else(|| Error::TempDirNotFound)?;
+            }
+        }
 
-        let deb_path = tmp_dir.path().join("package.deb");
-
-        // Direct .deb file
-        std::fs::write(&deb_path, bytes)?;
-
-        // Try different privilege escalation methods
-        self.try_install_with_privileges(&deb_path)
+        // If we get here, all temp locations failed
+        Err(Error::TempDirNotFound)
     }
 
     fn try_install_with_privileges(&self, deb_path: &Path) -> Result<()> {
