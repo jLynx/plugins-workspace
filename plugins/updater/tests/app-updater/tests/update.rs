@@ -53,7 +53,8 @@ fn build_app(cwd: &Path, config: &Config, bundle_updater: bool, target: BundleTa
         .arg(serde_json::to_string(config).unwrap())
         .env("TAURI_SIGNING_PRIVATE_KEY", UPDATER_PRIVATE_KEY)
         .env("TAURI_SIGNING_PRIVATE_KEY_PASSWORD", "")
-        .current_dir(cwd);
+        .current_dir(cwd)
+        .stdout(std::process::Stdio::null());
 
     #[cfg(target_os = "linux")]
     command.args(["--bundles", target.name()]);
