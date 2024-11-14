@@ -208,7 +208,6 @@ fn update_app() {
                 config.bundle.create_updater_artifacts,
                 Updater::String(V1Compatible::V1Compatible)
             );
-            println!("== IS v1_compatible: {}", v1_compatible);
 
             #[cfg(target_os = "linux")]
             let bundle_targets = vec![BundleTarget::Deb, BundleTarget::AppImage];
@@ -219,7 +218,6 @@ fn update_app() {
                 // Skip test for Linux .deb with v1 compatibility
                 #[cfg(target_os = "linux")]
                 if v1_compatible && bundle_target == BundleTarget::Deb {
-                    println!("Skipping test for .deb with v1 compatibility mode");
                     continue;
                 }
                 // bundle app update
@@ -237,7 +235,10 @@ fn update_app() {
                     None
                 };
 
-                for (bundle_target, out_bundle_path) in bundle_paths(&root_dir, "1.0.0") {
+                for (bundle_target, out_bundle_path) in bundle_paths(&root_dir, "1.0.0")
+                    .into_iter()
+                    .filter(|(t, _)| *t == bundle_target)
+                {
                     let bundle_updater_ext = if v1_compatible {
                         out_bundle_path
                             .extension()
@@ -260,6 +261,9 @@ fn update_app() {
                     };
                     let signature_extension = format!("{updater_extension}.sig");
                     let signature_path = out_bundle_path.with_extension(signature_extension);
+
+                    println!("SIG PATH {:?} | {}", signature_path, updater_extension);
+
                     let signature = std::fs::read_to_string(&signature_path).unwrap_or_else(|_| {
                         panic!("failed to read signature file {}", signature_path.display())
                     });
@@ -268,10 +272,6 @@ fn update_app() {
                         "target/debug/{}",
                         out_updater_path.file_name().unwrap().to_str().unwrap()
                     ));
-                    println!("Rename operation paths:");
-                    println!("  From: {}", out_updater_path.display());
-                    println!("  To: {}", updater_path.display());
-                    // Note, this may need to still be here, but also may need to move the sig too
                     std::fs::rename(&out_updater_path, &updater_path)
                         .expect("failed to rename bundle");
 
@@ -353,10 +353,6 @@ fn update_app() {
                                 .status()
                                 .expect("failed to change permissions");
                         } else if bundle_target == BundleTarget::Deb {
-                            println!(
-                                "Installing Deb package from: {}",
-                                initial_bundle_path.display()
-                            );
                             // Install the .deb package
                             let install_status = std::process::Command::new("sudo")
                                 .arg("dpkg")
@@ -401,10 +397,6 @@ fn update_app() {
                         } else {
                             #[cfg(target_os = "linux")]
                             {
-                                println!(
-                                    "RUNNING LINUX BUILD - Expected exit code: {}",
-                                    expected_exit_code
-                                );
                                 let mut c = Command::new("sudo");
                                 if bundle_target == BundleTarget::Deb {
                                     c.arg("/usr/bin/app-updater");
@@ -429,7 +421,6 @@ fn update_app() {
                                 "failed to run app, expected exit code {expected_exit_code}, got {code}"
                             );
                         }
-                        println!("===== CODE WAS SUCCESSFUL! {}", expected_exit_code);
                         #[cfg(windows)]
                         if code == UPDATED_EXIT_CODE {
                             // wait for the update to finish
