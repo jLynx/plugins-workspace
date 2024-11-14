@@ -53,8 +53,7 @@ fn build_app(cwd: &Path, config: &Config, bundle_updater: bool, target: BundleTa
         .arg(serde_json::to_string(config).unwrap())
         .env("TAURI_SIGNING_PRIVATE_KEY", UPDATER_PRIVATE_KEY)
         .env("TAURI_SIGNING_PRIVATE_KEY_PASSWORD", "")
-        .current_dir(cwd)
-        .stdout(std::process::Stdio::null());
+        .current_dir(cwd);
 
     #[cfg(target_os = "linux")]
     command.args(["--bundles", target.name()]);
@@ -117,15 +116,15 @@ fn bundle_paths(root_dir: &Path, version: &str) -> Vec<(BundleTarget, PathBuf)> 
     // Return both AppImage and Deb paths
     vec![
         (
-            BundleTarget::Deb,
-            root_dir.join(format!(
-                "target/debug/bundle/deb/app-updater_{version}_amd64.deb"
-            )),
-        ),
-        (
             BundleTarget::AppImage,
             root_dir.join(format!(
                 "target/debug/bundle/appimage/app-updater_{version}_amd64.AppImage"
+            )),
+        ),
+        (
+            BundleTarget::Deb,
+            root_dir.join(format!(
+                "target/debug/bundle/deb/app-updater_{version}_amd64.deb"
             )),
         ),
     ]
@@ -211,7 +210,7 @@ fn update_app() {
             );
 
             #[cfg(target_os = "linux")]
-            let bundle_targets = vec![BundleTarget::Deb, BundleTarget::AppImage];
+            let bundle_targets = vec![BundleTarget::AppImage, BundleTarget::Deb];
             #[cfg(not(target_os = "linux"))]
             let bundle_targets = vec![BundleTarget::default()];
 
