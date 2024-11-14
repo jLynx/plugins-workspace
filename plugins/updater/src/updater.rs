@@ -848,46 +848,82 @@ impl Update {
     /// └── ...
     fn install_inner(&self, bytes: &[u8]) -> Result<()> {
         use flate2::read::GzDecoder;
-
+        
         let cursor = Cursor::new(bytes);
         let mut extracted_files: Vec<PathBuf> = Vec::new();
 
-        // the first file in the tar.gz will always be
-        // <app_name>/Contents
-        let tmp_dir = tempfile::Builder::new()
+        // Create temp directories for backup and extraction
+        let tmp_backup_dir = tempfile::Builder::new()
             .prefix("tauri_current_app")
             .tempdir()?;
-
-        // create backup of our current app
-        std::fs::rename(&self.extract_path, tmp_dir.path())?;
+            
+        let tmp_extract_dir = tempfile::Builder::new()
+            .prefix("tauri_updated_app")
+            .tempdir()?
+            .into_path();
 
         let decoder = GzDecoder::new(cursor);
         let mut archive = tar::Archive::new(decoder);
 
-        std::fs::create_dir(&self.extract_path)?;
+        std::fs::create_dir(&tmp_extract_dir)?;
 
+        // Extract files to temporary directory
         for entry in archive.entries()? {
             let mut entry = entry?;
-
-            // skip the first folder (should be the app name)
             let collected_path: PathBuf = entry.path()?.iter().skip(1).collect();
-            let extraction_path = &self.extract_path.join(collected_path);
+            let extraction_path = tmp_extract_dir.join(&collected_path);
 
-            // if something went wrong during the extraction, we should restore previous app
-            if let Err(err) = entry.unpack(extraction_path) {
-                for file in extracted_files.iter().rev() {
-                    // delete all the files we extracted
+            if let Err(err) = entry.unpack(&extraction_path) {
+                // Cleanup on error
+                for file in &extracted_files {
                     if file.is_dir() {
                         std::fs::remove_dir(file)?;
                     } else {
                         std::fs::remove_file(file)?;
                     }
                 }
-                std::fs::rename(tmp_dir.path(), &self.extract_path)?;
+                std::fs::remove_dir_all(&tmp_extract_dir).ok();
                 return Err(err.into());
             }
+            extracted_files.push(extraction_path);
+        }
 
-            extracted_files.push(extraction_path.to_path_buf());
+        // Try to move the current app to backup
+        let move_result = std::fs::rename(&self.extract_path, tmp_backup_dir.path());
+        let need_authorization = if let Err(err) = move_result {
+            if err.kind() == std::io::ErrorKind::PermissionDenied {
+                true
+            } else {
+                std::fs::remove_dir_all(&tmp_extract_dir).ok();
+                return Err(err.into());
+            }
+        } else {
+            false
+        };
+
+        if need_authorization {
+            // Use AppleScript to perform moves with admin privileges
+            let script = format!(
+                "do shell script \"mv -f '{src}' '{backup}' && mv -f '{new}' '{src}'\" with administrator privileges",
+                src = self.extract_path.display(),
+                backup = tmp_backup_dir.path().display(),
+                new = tmp_extract_dir.display()
+            );
+            
+            let mut osascript = std::process::Command::new("osascript");
+            osascript.arg("-e").arg(script);
+            
+            let status = osascript.status()?;
+            if !status.success() {
+                std::fs::remove_dir_all(&tmp_extract_dir).ok();
+                return Err(Error::Io(std::io::Error::new(
+                    std::io::ErrorKind::PermissionDenied,
+                    "Failed to move the new app into place",
+                )));
+            }
+        } else {
+            // Move the new app to the target path if we didn't need admin rights
+            std::fs::rename(&tmp_extract_dir, &self.extract_path)?;
         }
 
         let _ = std::process::Command::new("touch")
