@@ -848,7 +848,7 @@ impl Update {
     /// └── ...
     fn install_inner(&self, bytes: &[u8]) -> Result<()> {
         use flate2::read::GzDecoder;
-        
+
         let cursor = Cursor::new(bytes);
         let mut extracted_files: Vec<PathBuf> = Vec::new();
 
@@ -856,7 +856,7 @@ impl Update {
         let tmp_backup_dir = tempfile::Builder::new()
             .prefix("tauri_current_app")
             .tempdir()?;
-            
+
         let tmp_extract_dir = tempfile::Builder::new()
             .prefix("tauri_updated_app")
             .tempdir()?
@@ -909,10 +909,10 @@ impl Update {
                 backup = tmp_backup_dir.path().display(),
                 new = tmp_extract_dir.display()
             );
-            
+
             let mut osascript = std::process::Command::new("osascript");
             osascript.arg("-e").arg(script);
-            
+
             let status = osascript.status()?;
             if !status.success() {
                 std::fs::remove_dir_all(&tmp_extract_dir).ok();
