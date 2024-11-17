@@ -79,12 +79,11 @@ fn build_app(cwd: &Path, config: &Config, bundle_updater: bool, target: BundleTa
     }
 }
 
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, PartialEq)]
 enum BundleTarget {
     AppImage,
-
+    Deb,
     App,
-
     Msi,
     Nsis,
 }
@@ -93,6 +92,7 @@ impl BundleTarget {
     fn name(self) -> &'static str {
         match self {
             Self::AppImage => "appimage",
+            Self::Deb => "deb",
             Self::App => "app",
             Self::Msi => "msi",
             Self::Nsis => "nsis",
@@ -105,7 +105,7 @@ impl Default for BundleTarget {
         #[cfg(any(target_os = "macos", target_os = "ios"))]
         return Self::App;
         #[cfg(target_os = "linux")]
-        return Self::AppImage;
+        return Self::Deb;
         #[cfg(windows)]
         return Self::Nsis;
     }
@@ -113,12 +113,21 @@ impl Default for BundleTarget {
 
 #[cfg(target_os = "linux")]
 fn bundle_paths(root_dir: &Path, version: &str) -> Vec<(BundleTarget, PathBuf)> {
-    vec![(
-        BundleTarget::AppImage,
-        root_dir.join(format!(
-            "target/debug/bundle/appimage/app-updater_{version}_amd64.AppImage"
-        )),
-    )]
+    // Return both AppImage and Deb paths
+    vec![
+        (
+            BundleTarget::Deb,
+            root_dir.join(format!(
+                "target/debug/bundle/deb/app-updater_{version}_amd64.deb"
+            )),
+        ),
+        (
+            BundleTarget::AppImage,
+            root_dir.join(format!(
+                "target/debug/bundle/appimage/app-updater_{version}_amd64.AppImage"
+            )),
+        ),
+    ]
 }
 
 #[cfg(target_os = "macos")]
@@ -168,179 +177,269 @@ fn update_app() {
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let root_dir = manifest_dir.join("../../../..");
 
-    for mut config in [
-        Config {
-            version: "1.0.0",
-            bundle: BundleConfig {
-                create_updater_artifacts: Updater::Bool(true),
+    // Set up cleanup on panic
+    let cleanup = std::panic::AssertUnwindSafe(|| {
+        #[cfg(target_os = "linux")]
+        {
+            let _ = std::process::Command::new("sudo")
+                .arg("dpkg")
+                .arg("-r")
+                .arg("app-updater")
+                .status();
+        }
+    });
+
+    let test_result = std::panic::catch_unwind(|| {
+        for mut config in [
+            Config {
+                version: "1.0.0",
+                bundle: BundleConfig {
+                    create_updater_artifacts: Updater::Bool(true),
+                },
             },
-        },
-        Config {
-            version: "1.0.0",
-            bundle: BundleConfig {
-                create_updater_artifacts: Updater::String(V1Compatible::V1Compatible),
+            Config {
+                version: "1.0.0",
+                bundle: BundleConfig {
+                    create_updater_artifacts: Updater::String(V1Compatible::V1Compatible),
+                },
             },
-        },
-    ] {
-        let v1_compatible = matches!(
-            config.bundle.create_updater_artifacts,
-            Updater::String(V1Compatible::V1Compatible)
-        );
-
-        // bundle app update
-        build_app(&manifest_dir, &config, true, Default::default());
-
-        let updater_zip_ext = if v1_compatible {
-            if cfg!(windows) {
-                Some("zip")
-            } else {
-                Some("tar.gz")
-            }
-        } else if cfg!(target_os = "macos") {
-            Some("tar.gz")
-        } else {
-            None
-        };
-
-        for (bundle_target, out_bundle_path) in bundle_paths(&root_dir, "1.0.0") {
-            let bundle_updater_ext = if v1_compatible {
-                out_bundle_path
-                    .extension()
-                    .unwrap()
-                    .to_str()
-                    .unwrap()
-                    .replace("exe", "nsis")
-            } else {
-                out_bundle_path
-                    .extension()
-                    .unwrap()
-                    .to_str()
-                    .unwrap()
-                    .to_string()
-            };
-            let updater_extension = if let Some(updater_zip_ext) = updater_zip_ext {
-                format!("{bundle_updater_ext}.{updater_zip_ext}")
-            } else {
-                bundle_updater_ext
-            };
-            let signature_extension = format!("{updater_extension}.sig");
-            let signature_path = out_bundle_path.with_extension(signature_extension);
-            let signature = std::fs::read_to_string(&signature_path).unwrap_or_else(|_| {
-                panic!("failed to read signature file {}", signature_path.display())
-            });
-            let out_updater_path = out_bundle_path.with_extension(updater_extension);
-            let updater_path = root_dir.join(format!(
-                "target/debug/{}",
-                out_updater_path.file_name().unwrap().to_str().unwrap()
-            ));
-            std::fs::rename(&out_updater_path, &updater_path).expect("failed to rename bundle");
-
-            let target = target.clone();
-
-            // start the updater server
-            let server = Arc::new(
-                tiny_http::Server::http("localhost:3007").expect("failed to start updater server"),
+        ] {
+            let v1_compatible = matches!(
+                config.bundle.create_updater_artifacts,
+                Updater::String(V1Compatible::V1Compatible)
             );
 
-            let server_ = server.clone();
-            std::thread::spawn(move || {
-                for request in server_.incoming_requests() {
-                    match request.url() {
-                        "/" => {
-                            let mut platforms = HashMap::new();
+            #[cfg(target_os = "linux")]
+            let bundle_targets = vec![BundleTarget::Deb, BundleTarget::AppImage];
+            #[cfg(not(target_os = "linux"))]
+            let bundle_targets = vec![BundleTarget::default()];
 
-                            platforms.insert(
-                                target.clone(),
-                                PlatformUpdate {
-                                    signature: signature.clone(),
-                                    url: "http://localhost:3007/download",
-                                    with_elevated_task: false,
-                                },
-                            );
-                            let body = serde_json::to_vec(&Update {
-                                version: "1.0.0",
-                                date: time::OffsetDateTime::now_utc()
-                                    .format(&time::format_description::well_known::Rfc3339)
-                                    .unwrap(),
-                                platforms,
-                            })
-                            .unwrap();
-                            let len = body.len();
-                            let response = tiny_http::Response::new(
-                                tiny_http::StatusCode(200),
-                                Vec::new(),
-                                std::io::Cursor::new(body),
-                                Some(len),
-                                None,
-                            );
-                            let _ = request.respond(response);
-                        }
-                        "/download" => {
-                            let _ = request.respond(tiny_http::Response::from_file(
-                                File::open(&updater_path).unwrap_or_else(|_| {
-                                    panic!(
-                                        "failed to open updater bundle {}",
-                                        updater_path.display()
-                                    )
-                                }),
-                            ));
-                        }
-                        _ => (),
-                    }
+            for bundle_target in bundle_targets {
+                // Skip test for Linux .deb with v1 compatibility
+                #[cfg(target_os = "linux")]
+                if v1_compatible && bundle_target == BundleTarget::Deb {
+                    continue;
                 }
-            });
+                // bundle app update
+                build_app(&manifest_dir, &config, true, bundle_target);
 
-            config.version = "0.1.0";
-
-            // bundle initial app version
-            build_app(&manifest_dir, &config, false, bundle_target);
-
-            let status_checks = if matches!(bundle_target, BundleTarget::Msi) {
-                // for msi we can't really check if the app was updated, because we can't change the install path
-                vec![UPDATED_EXIT_CODE]
-            } else {
-                vec![UPDATED_EXIT_CODE, UP_TO_DATE_EXIT_CODE]
-            };
-
-            for expected_exit_code in status_checks {
-                let mut binary_cmd = if cfg!(windows) {
-                    Command::new(root_dir.join("target/debug/app-updater.exe"))
+                let updater_zip_ext = if v1_compatible {
+                    if cfg!(windows) {
+                        Some("zip")
+                    } else {
+                        Some("tar.gz")
+                    }
                 } else if cfg!(target_os = "macos") {
-                    Command::new(
-                        bundle_paths(&root_dir, "0.1.0")
-                            .first()
-                            .unwrap()
-                            .1
-                            .join("Contents/MacOS/app-updater"),
-                    )
-                } else if std::env::var("CI").map(|v| v == "true").unwrap_or_default() {
-                    let mut c = Command::new("xvfb-run");
-                    c.arg("--auto-servernum")
-                        .arg(&bundle_paths(&root_dir, "0.1.0").first().unwrap().1);
-                    c
+                    Some("tar.gz")
                 } else {
-                    Command::new(&bundle_paths(&root_dir, "0.1.0").first().unwrap().1)
+                    None
                 };
 
-                binary_cmd.env("TARGET", bundle_target.name());
+                for (bundle_target, out_bundle_path) in bundle_paths(&root_dir, "1.0.0")
+                    .into_iter()
+                    .filter(|(t, _)| *t == bundle_target)
+                {
+                    let bundle_updater_ext = if v1_compatible {
+                        out_bundle_path
+                            .extension()
+                            .unwrap()
+                            .to_str()
+                            .unwrap()
+                            .replace("exe", "nsis")
+                    } else {
+                        out_bundle_path
+                            .extension()
+                            .unwrap()
+                            .to_str()
+                            .unwrap()
+                            .to_string()
+                    };
+                    let updater_extension = if let Some(updater_zip_ext) = updater_zip_ext {
+                        format!("{bundle_updater_ext}.{updater_zip_ext}")
+                    } else {
+                        bundle_updater_ext
+                    };
+                    let signature_extension = format!("{updater_extension}.sig");
+                    let signature_path = out_bundle_path.with_extension(signature_extension);
 
-                let status = binary_cmd.status().expect("failed to run app");
-                let code = status.code().unwrap_or(-1);
+                    println!("SIG PATH {:?} | {}", signature_path, updater_extension);
 
-                if code != expected_exit_code {
-                    panic!(
-                        "failed to run app, expected exit code {expected_exit_code}, got {code}"
+                    let signature = std::fs::read_to_string(&signature_path).unwrap_or_else(|_| {
+                        panic!("failed to read signature file {}", signature_path.display())
+                    });
+                    let out_updater_path = out_bundle_path.with_extension(updater_extension);
+                    let updater_path = root_dir.join(format!(
+                        "target/debug/{}",
+                        out_updater_path.file_name().unwrap().to_str().unwrap()
+                    ));
+                    std::fs::rename(&out_updater_path, &updater_path)
+                        .expect("failed to rename bundle");
+
+                    let target = target.clone();
+
+                    // start the updater server
+                    let server = Arc::new(
+                        tiny_http::Server::http("localhost:3007")
+                            .expect("failed to start updater server"),
                     );
-                }
-                #[cfg(windows)]
-                if code == UPDATED_EXIT_CODE {
-                    // wait for the update to finish
-                    std::thread::sleep(std::time::Duration::from_secs(5));
+
+                    let server_ = server.clone();
+                    std::thread::spawn(move || {
+                        for request in server_.incoming_requests() {
+                            match request.url() {
+                                "/" => {
+                                    let mut platforms = HashMap::new();
+
+                                    platforms.insert(
+                                        target.clone(),
+                                        PlatformUpdate {
+                                            signature: signature.clone(),
+                                            url: "http://localhost:3007/download",
+                                            with_elevated_task: false,
+                                        },
+                                    );
+                                    let body = serde_json::to_vec(&Update {
+                                        version: "1.0.0",
+                                        date: time::OffsetDateTime::now_utc()
+                                            .format(&time::format_description::well_known::Rfc3339)
+                                            .unwrap(),
+                                        platforms,
+                                    })
+                                    .unwrap();
+                                    let len = body.len();
+                                    let response = tiny_http::Response::new(
+                                        tiny_http::StatusCode(200),
+                                        Vec::new(),
+                                        std::io::Cursor::new(body),
+                                        Some(len),
+                                        None,
+                                    );
+                                    let _ = request.respond(response);
+                                }
+                                "/download" => {
+                                    let _ = request.respond(tiny_http::Response::from_file(
+                                        File::open(&updater_path).unwrap_or_else(|_| {
+                                            panic!(
+                                                "failed to open updater bundle {}",
+                                                updater_path.display()
+                                            )
+                                        }),
+                                    ));
+                                }
+                                _ => (),
+                            }
+                        }
+                    });
+
+                    config.version = "0.1.0";
+
+                    // bundle initial app version
+                    build_app(&manifest_dir, &config, false, bundle_target);
+
+                    // Set appropriate permissions and install package if needed
+                    #[cfg(target_os = "linux")]
+                    {
+                        let initial_bundle_path = bundle_paths(&root_dir, "0.1.0")
+                            .iter()
+                            .find(|(t, _)| *t == bundle_target)
+                            .map(|(_, path)| path.clone())
+                            .unwrap();
+
+                        if bundle_target == BundleTarget::AppImage {
+                            std::process::Command::new("sudo")
+                                .arg("chmod")
+                                .arg("+x")
+                                .arg(initial_bundle_path)
+                                .status()
+                                .expect("failed to change permissions");
+                        } else if bundle_target == BundleTarget::Deb {
+                            // Install the .deb package
+                            let install_status = std::process::Command::new("sudo")
+                                .arg("dpkg")
+                                .arg("-i")
+                                .arg(initial_bundle_path)
+                                .status()
+                                .expect("failed to install .deb package");
+
+                            if !install_status.success() {
+                                panic!("Failed to install .deb package");
+                            }
+                        }
+                    }
+
+                    let status_checks = if matches!(bundle_target, BundleTarget::Msi) {
+                        vec![UPDATED_EXIT_CODE]
+                    } else {
+                        vec![UPDATED_EXIT_CODE, UP_TO_DATE_EXIT_CODE]
+                    };
+
+                    for expected_exit_code in status_checks {
+                        let mut binary_cmd = if cfg!(windows) {
+                            Command::new(root_dir.join("target/debug/app-updater.exe"))
+                        } else if cfg!(target_os = "macos") {
+                            Command::new(
+                                bundle_paths(&root_dir, "0.1.0")
+                                    .first()
+                                    .unwrap()
+                                    .1
+                                    .join("Contents/MacOS/app-updater"),
+                            )
+                        } else if std::env::var("CI").map(|v| v == "true").unwrap_or_default() {
+                            let mut c = Command::new("xvfb-run");
+                            c.arg("--auto-servernum");
+                            #[cfg(target_os = "linux")]
+                            if bundle_target == BundleTarget::Deb {
+                                c.arg("/usr/bin/app-updater");
+                            } else {
+                                c.arg(&bundle_paths(&root_dir, "0.1.0").first().unwrap().1);
+                            }
+                            c
+                        } else {
+                            #[cfg(target_os = "linux")]
+                            {
+                                let mut c = Command::new("sudo");
+                                if bundle_target == BundleTarget::Deb {
+                                    c.arg("/usr/bin/app-updater");
+                                } else {
+                                    c.arg(&bundle_paths(&root_dir, "0.1.0").first().unwrap().1);
+                                }
+                                c
+                            }
+                            #[cfg(not(target_os = "linux"))]
+                            {
+                                Command::new(&bundle_paths(&root_dir, "0.1.0").first().unwrap().1)
+                            }
+                        };
+
+                        binary_cmd.env("TARGET", bundle_target.name());
+
+                        let status = binary_cmd.status().expect("failed to run app");
+                        let code = status.code().unwrap_or(-1);
+
+                        if code != expected_exit_code {
+                            panic!(
+                                "failed to run app, expected exit code {expected_exit_code}, got {code}"
+                            );
+                        }
+                        #[cfg(windows)]
+                        if code == UPDATED_EXIT_CODE {
+                            // wait for the update to finish
+                            std::thread::sleep(std::time::Duration::from_secs(5));
+                        }
+                    }
+
+                    // graceful shutdown
+                    server.unblock();
                 }
             }
-
-            // graceful shutdown
-            server.unblock();
         }
+    });
+
+    // Always run cleanup
+    cleanup();
+
+    // Re-panic if there was an error
+    if let Err(e) = test_result {
+        std::panic::resume_unwind(e);
     }
 }

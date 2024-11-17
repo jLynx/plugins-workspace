@@ -34,8 +34,13 @@ jobs:
         with:
           fetch-depth: 0
 
+      # - name: install stable
+      #   uses: dtolnay/rust-toolchain@stable
+
       - name: install stable
-        uses: dtolnay/rust-toolchain@stable
+        run: |
+          sudo curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sudo sh -s -- -y
+          sudo rustup default stable
 
       - name: install Linux dependencies
         if: matrix.platform == 'ubuntu-22.04'
@@ -45,8 +50,11 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
 
+      # - name: install Tauri CLI
+      #   run: sudo cargo install tauri-cli --git https://github.com/tauri-apps/tauri --branch dev
+
       - name: install Tauri CLI
-        run: cargo install tauri-cli --git https://github.com/tauri-apps/tauri --branch dev
+        run: sudo $(which cargo) install tauri-cli --git https://github.com/tauri-apps/tauri --branch dev
 
       - name: run integration tests
-        run: cargo test --test '*' -- --ignored
+        run: sudo cargo test --test '*' -- --ignored
